@@ -1,0 +1,8 @@
+# Telegram Bot
+python-telegram-bot==20.7
+
+# Работа с документами
+python-docx==1.1.0
+
+# Конфигурация
+python-dotenv==1.0.0
