@@ -30,11 +30,11 @@ class Settings:
     GOST_FONT_NAME = "Times New Roman"
     GOST_FONT_SIZE = 14
     GOST_LINE_SPACING = 1.5
-    GOST_LEFT_MARGIN_CM = 3
-    GOST_RIGHT_MARGIN_CM = 1
-    GOST_TOP_MARGIN_CM = 2
-    GOST_BOTTOM_MARGIN_CM = 2
-    GOST_INDENT_CM = 1.25
+    GOST_LEFT_MARGIN_CM = 3      # Левое поле 3 см
+    GOST_RIGHT_MARGIN_CM = 1.5   # Правое поле 1.5 см (исправлено с 1)
+    GOST_TOP_MARGIN_CM = 2       # Верхнее поле 2 см
+    GOST_BOTTOM_MARGIN_CM = 2    # Нижнее поле 2 см
+    GOST_INDENT_CM = 1.25        # Красная строка 1.25 см
 
     def validate(self):
         """Проверка обязательных настроек"""
