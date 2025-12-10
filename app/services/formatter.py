@@ -1047,29 +1047,26 @@ def _process_figures(doc: Document, title_end_idx: int) -> None:
 
 
 def _fix_figure_caption_number(paragraph, correct_number: int) -> None:
-    """
-    Исправляет номер в подписи рисунка.
-    'Рисунок  - описание' -> 'Рисунок 1 – описание'
-    'Рисунок 5 - описание' -> 'Рисунок 1 – описание'
-    """
+    """Исправляет номер в подписи рисунка"""
+
     text = paragraph.text.strip()
 
-    # Паттерн: Рисунок [номер] [-–—] описание
     match = re.match(r'^(Рисунок)\s*(\d*)\s*[-–—]\s*(.*)$', text, re.IGNORECASE)
 
     if match:
-        prefix = match.group(1)  # "Рисунок"
-        description = match.group(3)  # описание после тире
+        prefix = match.group(1)
+        description = match.group(3)
 
-        # Используем короткое тире –
         new_text = f"{prefix} {correct_number} – {description}"
 
-        # Очищаем параграф и записываем новый текст
         paragraph.clear()
         run = paragraph.add_run(new_text)
         run.font.name = settings.GOST_FONT_NAME
         run.font.size = Pt(settings.GOST_FONT_SIZE)
         run._element.rPr.rFonts.set(qn('w:eastAsia'), settings.GOST_FONT_NAME)
+
+    paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    paragraph.paragraph_format.first_line_indent = Cm(0)
 
 
 def _insert_figure_caption(doc: Document, insert_index: int, figure_number: int) -> None:
@@ -1161,6 +1158,8 @@ def _format_document_content(doc: Document, title_end_idx: int) -> None:
             _format_main_heading(paragraph)
         elif _is_subheading(text):
             _format_subheading(paragraph)
+        elif _is_figure_caption(text):
+            _format_caption(paragraph)
         elif _is_list_item(paragraph):
             _format_list_item(paragraph)
         else:
