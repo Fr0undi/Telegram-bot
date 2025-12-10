@@ -20,11 +20,11 @@ logger = setup_logger(__name__)
 def _find_title_page_end(doc: Document) -> int:
     """
     Находит индекс параграфа, где заканчивается титульный лист.
-    Титульник заканчивается перед "Содержание" или "Оглавление".
 
     Returns:
         Индекс первого параграфа после титульника
     """
+
     for i, para in enumerate(doc.paragraphs):
         text = para.text.strip().upper()
         if text in ['СОДЕРЖАНИЕ', 'ОГЛАВЛЕНИЕ']:
@@ -36,6 +36,7 @@ def _is_main_heading(text: str) -> bool:
     """
     Проверяет, является ли текст главным заголовком (требует разрыв страницы).
     """
+
     text_upper = text.strip().upper()
 
     # Специальные разделы
@@ -55,41 +56,26 @@ def _is_subheading(text: str) -> bool:
     """
     Проверяет, является ли текст подзаголовком (1.1, 1.2, 2.1 и т.д.)
     """
+
     return bool(re.match(r'^\d+\.\d+', text.strip()))
 
 
 def _is_figure_caption(text: str) -> bool:
     """Проверяет, является ли текст подписью к рисунку"""
+
     return bool(re.match(r'^Рисунок\s*\d*\s*[-–—]', text.strip(), re.IGNORECASE))
 
-
-def _is_table_caption(text: str) -> bool:
-    """Проверяет, является ли текст подписью к таблице"""
-    return bool(re.match(r'^Таблица\s+\d+\s*[-–—]', text.strip(), re.IGNORECASE))
-
-
 def _has_image(paragraph) -> bool:
-    """Проверяет, содержит ли параграф изображение."""
-    # Ищем blip элементы (изображения)
-    blip = paragraph._element.find('.//{http://schemas.openxmlformats.org/drawingml/2006/main}blip')
-    if blip is not None:
-        return True
+    """Проверяет, содержит ли параграф изображение"""
 
-    # Также проверяем drawing элементы
-    drawing = paragraph._element.find('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}drawing')
-    if drawing is not None:
-        return True
-
-    # И pict элементы (старый формат)
-    pict = paragraph._element.find('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}pict')
-    if pict is not None:
-        return True
-
-    return False
+    nsmap = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+    drawings = paragraph._element.findall('.//w:drawing', namespaces=nsmap)
+    return len(drawings) > 0
 
 
 def _is_list_item(paragraph) -> bool:
     """Проверяет, является ли параграф элементом списка (имеет numPr)"""
+
     pPr = paragraph._element.find(qn('w:pPr'))
     if pPr is not None:
         numPr = pPr.find(qn('w:numPr'))
@@ -98,9 +84,8 @@ def _is_list_item(paragraph) -> bool:
 
 
 def _fix_list_first_letter(doc: Document, title_end_idx: int) -> None:
-    """
-    Делает первую букву в элементах списка строчной.
-    """
+    """Делает первую букву в элементах списка строчной"""
+
     count = 0
 
     for i, para in enumerate(doc.paragraphs):
@@ -145,8 +130,8 @@ def _fix_multiple_spaces(doc: Document, title_end_idx: int) -> None:
     """
     Убирает множественные пробелы (заменяет на один).
     Обрабатывает случаи когда пробелы в разных runs.
-    НЕ трогает титульник.
     """
+
     import re
     count = 0
 
@@ -203,17 +188,10 @@ def _fix_multiple_spaces(doc: Document, title_end_idx: int) -> None:
 def _fix_abbreviations(doc: Document, title_end_idx: int) -> None:
     """
     Заменяет сокращения на полные формы:
-    - т.к. → так как
-    - т.е. → то есть
-    - и т.д. → и так далее
-    - и т.п. → и тому подобное
-    - и др. → и другие
-
-    НЕ заменяет:
+    Не заменяет:
     - т.н. (слишком часто путается с инициалами Т. Н.)
-
-    НЕ трогает титульник.
     """
+
     import re
     count = 0
 
@@ -223,8 +201,7 @@ def _fix_abbreviations(doc: Document, title_end_idx: int) -> None:
 
         new_text = text
 
-        # Важно: используем отрицательный lookbehind чтобы не заменять после запятой (инициалы)
-        # т.к. → так как (но не после запятой, как в "Иванов, т.к. ...")
+        # т.к. → так как
         new_text = re.sub(r'(?<![,А-ЯA-Z])\s+т\.\s*к\.', ' так как', new_text, flags=re.IGNORECASE)
         new_text = re.sub(r'^т\.\s*к\.', 'так как', new_text, flags=re.IGNORECASE)
 
@@ -268,12 +245,8 @@ def _fix_abbreviations(doc: Document, title_end_idx: int) -> None:
 
 
 def _format_bibliography(doc: Document) -> None:
-    """
-    Форматирует библиографический список:
-    - Шрифт Times New Roman 14pt
-    - Выравнивание по ширине
-    - Не меняет окончания записей
-    """
+    """Форматирует библиографический список"""
+
     count = 0
     in_bibliography = False
 
@@ -314,6 +287,7 @@ def _add_table_captions(doc: Document) -> None:
     Проверяет и форматирует подписи к таблицам.
     Формат: "Таблица X – Название"
     """
+
     import re
     count = 0
 
@@ -349,41 +323,14 @@ def _add_table_captions(doc: Document) -> None:
     else:
         logger.info("Подписи таблиц не найдены или уже корректны")
 
-
-def _format_tables(doc: Document) -> None:
-    """
-    Форматирует таблицы:
-    - Шрифт Times New Roman 12pt
-    - Выравнивание текста
-    """
-    count = 0
-
-    for table in doc.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                for para in cell.paragraphs:
-                    para.alignment = WD_ALIGN_PARAGRAPH.LEFT
-
-                    for run in para.runs:
-                        run.font.name = settings.GOST_FONT_NAME
-                        run.font.size = Pt(12)
-                        run._element.rPr.rFonts.set(qn('w:eastAsia'), settings.GOST_FONT_NAME)
-                        count += 1
-
-    if count > 0:
-        logger.info(f"Отформатировано {count} runs в таблицах")
-    else:
-        logger.info("Таблицы не найдены или пусты")
-
-
 def _fix_non_breaking_spaces(doc: Document, title_end_idx: int) -> None:
     """
     Добавляет неразрывные пробелы:
     - После №, §, рис., табл.
     - Между инициалами и фамилией
     - Перед единицами измерения
-    НЕ трогает титульник.
     """
+
     import re
     count = 0
     NBSP = '\u00A0'
@@ -447,26 +394,20 @@ def _fix_non_breaking_spaces(doc: Document, title_end_idx: int) -> None:
 
 def _fix_quotes(doc: Document, title_end_idx: int) -> None:
     """
-    Заменяет все типы кавычек на русские «ёлочки».
+    Заменяет все типы кавычек на русские «».
     " " " ' → «»
-    НЕ трогает титульник.
     """
+
     count = 0
 
     def process_text(text):
-        """Заменяет кавычки на ёлочки с учётом контекста"""
+        """Заменяет кавычки на «» с учётом контекста"""
+
         if not text:
             return text, False
 
         new_text = text
         changed = False
-
-        # Заменяем парные кавычки
-        # Открывающие кавычки (после пробела, начала строки, или открывающей скобки)
-        import re
-
-        # Паттерн для открывающей кавычки: начало строки, пробел, или ( перед кавычкой
-        # Заменяем " " на « если это открывающая позиция
 
         result = []
         i = 0
@@ -528,12 +469,30 @@ def _fix_quotes(doc: Document, title_end_idx: int) -> None:
     logger.info(f"Исправлено кавычек в {count} runs")
 
 
+def _has_image(paragraph) -> bool:
+    """Проверяет, содержит ли параграф изображение"""
+
+    # Ищем blip элементы (изображения)
+    blip = paragraph._element.find('.//{http://schemas.openxmlformats.org/drawingml/2006/main}blip')
+    if blip is not None:
+        return True
+
+    # Также проверяем drawing элементы
+    drawing = paragraph._element.find('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}drawing')
+    if drawing is not None:
+        return True
+
+    # И pict элементы (старый формат)
+    pict = paragraph._element.find('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}pict')
+    if pict is not None:
+        return True
+
+    return False
+
+
 def _remove_empty_paragraphs(doc: Document, title_end_idx: int) -> None:
-    """
-    Удаляет лишние пустые параграфы (оставляет максимум 1 пустой подряд).
-    Не трогает титульник.
-    НЕ удаляет параграфы с рисунками!
-    """
+    """Удаляет лишние пустые параграфы (оставляет максимум 1 пустой подряд)"""
+
     # Собираем индексы параграфов для удаления
     to_remove = []
     consecutive_empty = 0
@@ -567,8 +526,8 @@ def _fix_colons(doc: Document, title_end_idx: int) -> None:
     Исправляет форматирование двоеточий:
     1. Убирает пробел перед двоеточием: "слово :" -> "слово:"
     2. После двоеточия слово с маленькой буквы: "Тема: Слово" -> "Тема: слово"
-    НЕ трогает титульник.
     """
+
     import re
     count = 0
 
@@ -597,6 +556,7 @@ def _fix_colons(doc: Document, title_end_idx: int) -> None:
 
     def process_paragraph_runs(runs):
         """Обрабатывает runs параграфа, учитывая переходы между runs"""
+
         nonlocal count
 
         for i, run in enumerate(runs):
@@ -653,8 +613,8 @@ def _fix_dashes(doc: Document, title_end_idx: int) -> None:
     """
     Заменяет длинные тире (—) и дефисы с пробелами на короткие тире (–).
     Обрабатывает случаи когда дефис находится в отдельном run.
-    НЕ трогает титульник.
     """
+
     count = 0
 
     def process_runs(runs):
@@ -731,6 +691,7 @@ def _fix_numbering_styles(doc: Document) -> None:
     Исправляет стили нумерации в numbering.xml.
     Устанавливает Times New Roman 14pt для всех номеров списков.
     """
+
     # Получаем доступ к numbering part
     try:
         numbering_part = doc.part.numbering_part
@@ -788,9 +749,8 @@ def _fix_list_punctuation(doc: Document, title_end_idx: int) -> None:
     Исправляет знаки препинания в нумерованных списках:
     - Все элементы кроме последнего заканчиваются на ;
     - Последний элемент заканчивается на .
-
-    НЕ трогает библиографический список.
     """
+
     # Находим начало библиографии, чтобы не трогать её
     bibliography_start_idx = None
     for i, para in enumerate(doc.paragraphs):
@@ -866,6 +826,7 @@ def _set_paragraph_ending(paragraph, ending: str) -> None:
     Устанавливает правильное окончание параграфа.
     Работает и с обычным текстом, и с гиперссылками.
     """
+
     from docx.oxml.ns import qn
     from docx.oxml import OxmlElement
 
@@ -933,6 +894,7 @@ def _set_paragraph_ending(paragraph, ending: str) -> None:
 
 def _add_page_break_before(paragraph) -> None:
     """Добавляет разрыв страницы перед параграфом через pageBreakBefore"""
+
     p = paragraph._element
     pPr = p.get_or_add_pPr()
 
@@ -949,6 +911,7 @@ def _add_page_break_before(paragraph) -> None:
 
 def _remove_page_break_before(paragraph) -> None:
     """Удаляет разрыв страницы перед параграфом"""
+
     pPr = paragraph._element.find(qn('w:pPr'))
     if pPr is not None:
         pb = pPr.find(qn('w:pageBreakBefore'))
@@ -957,9 +920,8 @@ def _remove_page_break_before(paragraph) -> None:
 
 
 def format_document(input_file: str, output_file: str = None) -> bool:
-    """
-    Основная функция для форматирования документа по ГОСТ
-    """
+    """Основная функция для форматирования документа по ГОСТ"""
+
     if not output_file:
         base, ext = os.path.splitext(input_file)
         output_file = f"{base}_formatted{ext}"
@@ -986,9 +948,9 @@ def format_document(input_file: str, output_file: str = None) -> bool:
         # Нумерация должна быть настроена в исходном документе
         logger.info("Нумерация страниц не изменяется (сохраняем оригинальную)")
 
-        # НЕ меняем стили нумерации списков - это глобальные стили,
-        # они могут затронуть титульник
-        logger.info("Стили нумерации списков не изменяются (сохраняем оригинальные)")
+        # Исправление стилей нумерации списков
+        logger.info("Исправление стилей нумерации списков...")
+        _fix_numbering_styles(doc)
 
         # Обработка подписей к рисункам
         logger.info("Обработка подписей к рисункам...")
@@ -1026,10 +988,6 @@ def format_document(input_file: str, output_file: str = None) -> bool:
         logger.info("Добавление неразрывных пробелов...")
         _fix_non_breaking_spaces(doc, title_end_idx)
 
-        # Форматирование таблиц
-        logger.info("Форматирование таблиц...")
-        _format_tables(doc)
-
         # Подписи таблиц
         logger.info("Проверка подписей таблиц...")
         _add_table_captions(doc)
@@ -1060,9 +1018,7 @@ def format_document(input_file: str, output_file: str = None) -> bool:
 
 
 def _process_figures(doc: Document, title_end_idx: int) -> None:
-    """
-    Обрабатывает рисунки: добавляет недостающие подписи и исправляет нумерацию.
-    """
+    """Обрабатывает рисунки: добавляет недостающие подписи и исправляет нумерацию"""
     figure_number = 0
     i = title_end_idx
 
@@ -1117,9 +1073,8 @@ def _fix_figure_caption_number(paragraph, correct_number: int) -> None:
 
 
 def _insert_figure_caption(doc: Document, insert_index: int, figure_number: int) -> None:
-    """
-    Вставляет новую подпись к рисунку.
-    """
+    """Вставляет новую подпись к рисунку"""
+
     # Получаем параграф, ПЕРЕД которым нужно вставить
     if insert_index < len(doc.paragraphs):
         target_para = doc.paragraphs[insert_index]
@@ -1147,6 +1102,7 @@ def _process_page_breaks(doc: Document, title_end_idx: int) -> None:
     - Удаляет пустые параграфы перед главными заголовками
     - Добавляет корректные разрывы страниц
     """
+
     # Собираем индексы главных заголовков
     main_heading_indices = []
 
@@ -1157,9 +1113,8 @@ def _process_page_breaks(doc: Document, title_end_idx: int) -> None:
         if text and _is_main_heading(text):
             main_heading_indices.append(i)
 
-    # Для каждого главного заголовка удаляем пустые параграфы перед ним
-    # и добавляем pageBreakBefore
-    # ВАЖНО: идём с конца, чтобы не сбить индексы
+    # Для каждого главного заголовка удаляем пустые параграфы перед ним и добавляем pageBreakBefore
+    # Идём с конца, чтобы не сбить индексы
 
     paragraphs_to_remove = []
 
@@ -1193,9 +1148,7 @@ def _process_page_breaks(doc: Document, title_end_idx: int) -> None:
 
 
 def _format_document_content(doc: Document, title_end_idx: int) -> None:
-    """
-    Форматирует содержимое документа, пропуская титульный лист.
-    """
+    """Форматирует содержимое документа, пропуская титульный лист"""
     for i, paragraph in enumerate(doc.paragraphs):
         if i < title_end_idx:
             continue
@@ -1208,8 +1161,6 @@ def _format_document_content(doc: Document, title_end_idx: int) -> None:
             _format_main_heading(paragraph)
         elif _is_subheading(text):
             _format_subheading(paragraph)
-        elif _is_figure_caption(text) or _is_table_caption(text):
-            _format_caption(paragraph)
         elif _is_list_item(paragraph):
             _format_list_item(paragraph)
         else:
@@ -1217,9 +1168,8 @@ def _format_document_content(doc: Document, title_end_idx: int) -> None:
 
 
 def _format_main_heading(paragraph) -> None:
-    """
-    Форматирует главный заголовок: 16pt BOLD, CENTER, без отступа
-    """
+    """Форматирует главный заголовок: 16pt BOLD, CENTER, без отступа"""
+
     paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
     paragraph.paragraph_format.first_line_indent = Cm(0)
@@ -1236,9 +1186,8 @@ def _format_main_heading(paragraph) -> None:
 
 
 def _format_subheading(paragraph) -> None:
-    """
-    Форматирует подзаголовок: 14pt BOLD, CENTER, без отступа
-    """
+    """Форматирует подзаголовок: 14pt BOLD, CENTER, без отступа"""
+
     paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
     paragraph.paragraph_format.first_line_indent = Cm(0)
@@ -1255,9 +1204,8 @@ def _format_subheading(paragraph) -> None:
 
 
 def _format_caption(paragraph) -> None:
-    """
-    Форматирует подпись к рисунку/таблице: 14pt, CENTER, без отступа
-    """
+    """Форматирует подпись к рисунку/таблице: 14pt, CENTER, без отступа"""
+
     paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
     paragraph.paragraph_format.first_line_indent = Cm(0)
@@ -1281,6 +1229,7 @@ def _format_list_item(paragraph) -> None:
     - Первая строка (с номером) с отступом 1.25 см
     - Последующие строки от начала (0 см)
     """
+
     paragraph.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
 
     # Отступы:
@@ -1301,9 +1250,8 @@ def _format_list_item(paragraph) -> None:
 
 
 def _format_regular_paragraph(paragraph) -> None:
-    """
-    Форматирует обычный абзац: 14pt, JUSTIFY, красная строка 1.25 см
-    """
+    """Форматирует обычный абзац: 14pt, JUSTIFY, красная строка 1.25 см"""
+
     paragraph.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
 
     paragraph.paragraph_format.first_line_indent = Cm(settings.GOST_INDENT_CM)
@@ -1323,6 +1271,7 @@ def _add_page_numbers(doc: Document) -> None:
     Добавляет нумерацию страниц.
     Титульник = страница 1, но номер не отображается.
     """
+
     for section in doc.sections:
         section.different_first_page_header_footer = True
 
