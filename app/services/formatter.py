@@ -19,16 +19,75 @@ logger = setup_logger(__name__)
 
 def _find_title_page_end(doc: Document) -> int:
     """
-    Находит индекс параграфа, где заканчивается титульный лист.
+    Находит индекс параграфа, где заканчивается первая страница (титульный лист).
+
+    Ищет в порядке приоритета:
+    1. Разрыв страницы (page break) - всё до него считается первой страницей
+    2. Разрыв секции (section break) - тоже начинает новую страницу
+    3. "СОДЕРЖАНИЕ" или "ОГЛАВЛЕНИЕ" - начало второй страницы
+    4. Главные заголовки (ВВЕДЕНИЕ, ГЛАВА и т.д.) - как последний резерв
 
     Returns:
-        Индекс первого параграфа после титульника
+        Индекс первого параграфа ВТОРОЙ страницы (все параграфы до этого индекса пропускаются)
     """
 
+    nsmap = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+
+    # Сначала ищем разрыв страницы - это самый надёжный маркер
+    for i, para in enumerate(doc.paragraphs):
+        # Проверяем наличие разрыва страницы в параграфе
+        # Разрыв страницы может быть в виде:
+        # 1. pageBreakBefore в свойствах параграфа
+        # 2. br элемент с type="page" внутри run
+        # 3. sectPr (разрыв секции)
+
+        # Проверяем pageBreakBefore
+        pPr = para._element.find(qn('w:pPr'))
+        if pPr is not None:
+            pb_before = pPr.find(qn('w:pageBreakBefore'))
+            if pb_before is not None:
+                val = pb_before.get(qn('w:val'))
+                # Если val не указан или равен true/1, это разрыв страницы
+                if val is None or val.lower() in ('true', '1', 'on'):
+                    if i > 0:  # Не считаем если это самый первый параграф
+                        logger.info(f"Найден pageBreakBefore на параграфе {i}")
+                        return i
+
+            # Проверяем sectPr (разрыв секции) в свойствах параграфа
+            sectPr = pPr.find(qn('w:sectPr'))
+            if sectPr is not None and i > 0:
+                # Разрыв секции означает начало новой страницы
+                # Следующий параграф - начало новой страницы
+                logger.info(f"Найден sectPr на параграфе {i}")
+                return i + 1
+
+        # Проверяем br элементы с type="page"
+        for br in para._element.findall('.//w:br', nsmap):
+            br_type = br.get(qn('w:type'))
+            if br_type == 'page':
+                # Разрыв найден - следующий параграф начинает новую страницу
+                logger.info(f"Найден br type=page на параграфе {i}")
+                return i + 1
+
+    # Разрывов нет - ищем "СОДЕРЖАНИЕ"/"ОГЛАВЛЕНИЕ" как начало второй страницы
     for i, para in enumerate(doc.paragraphs):
         text = para.text.strip().upper()
         if text in ['СОДЕРЖАНИЕ', 'ОГЛАВЛЕНИЕ']:
+            logger.info(f"Найдено '{text}' на параграфе {i} (начало второй страницы)")
             return i
+
+    # Если ничего не найдено, ищем первый главный заголовок
+    # (ВВЕДЕНИЕ, ГЛАВА и т.д.) - это точно не титульный лист
+    for i, para in enumerate(doc.paragraphs):
+        text = para.text.strip().upper()
+        if text in ['ВВЕДЕНИЕ', 'АННОТАЦИЯ', 'РЕФЕРАТ']:
+            logger.info(f"Найден заголовок '{text}' на параграфе {i}")
+            return i
+        if text.startswith('ГЛАВА ') or text.startswith('ГЛАВА\t'):
+            logger.info(f"Найден заголовок '{text}' на параграфе {i}")
+            return i
+
+    logger.warning("Не удалось определить конец первой страницы, возвращаем 0")
     return 0
 
 
@@ -64,14 +123,6 @@ def _is_figure_caption(text: str) -> bool:
     """Проверяет, является ли текст подписью к рисунку"""
 
     return bool(re.match(r'^Рисунок\s*\d*\s*[-–—]', text.strip(), re.IGNORECASE))
-
-def _has_image(paragraph) -> bool:
-    """Проверяет, содержит ли параграф изображение"""
-
-    nsmap = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
-    drawings = paragraph._element.findall('.//w:drawing', namespaces=nsmap)
-    return len(drawings) > 0
-
 
 def _is_list_item(paragraph) -> bool:
     """Проверяет, является ли параграф элементом списка (имеет numPr)"""
@@ -244,13 +295,16 @@ def _fix_abbreviations(doc: Document, title_end_idx: int) -> None:
     logger.info(f"Заменено сокращений в {count} runs")
 
 
-def _format_bibliography(doc: Document) -> None:
+def _format_bibliography(doc: Document, title_end_idx: int) -> None:
     """Форматирует библиографический список"""
 
     count = 0
     in_bibliography = False
 
-    for para in doc.paragraphs:
+    for i, para in enumerate(doc.paragraphs):
+        if i < title_end_idx:
+            continue
+
         text = para.text.strip()
 
         # Определяем начало библиографии
@@ -282,7 +336,7 @@ def _format_bibliography(doc: Document) -> None:
     logger.info(f"Отформатировано {count} записей в библиографии")
 
 
-def _add_table_captions(doc: Document) -> None:
+def _add_table_captions(doc: Document, title_end_idx: int) -> None:
     """
     Проверяет и форматирует подписи к таблицам.
     Формат: "Таблица X – Название"
@@ -291,7 +345,10 @@ def _add_table_captions(doc: Document) -> None:
     import re
     count = 0
 
-    for para in doc.paragraphs:
+    for i, para in enumerate(doc.paragraphs):
+        if i < title_end_idx:
+            continue
+
         text = para.text.strip()
 
         # Ищем подписи таблиц
@@ -521,6 +578,71 @@ def _remove_empty_paragraphs(doc: Document, title_end_idx: int) -> None:
     logger.info(f"Удалено {len(to_remove)} лишних пустых параграфов")
 
 
+def _remove_empty_around_headings(doc: Document, title_end_idx: int) -> None:
+    """
+    Удаляет пустые параграфы ДО и ПОСЛЕ заголовков:
+    - СОДЕРЖАНИЕ, ОГЛАВЛЕНИЕ, ВВЕДЕНИЕ, ЗАКЛЮЧЕНИЕ и т.д.
+    - ГЛАВА 1, ГЛАВА 2, ...
+    - 1.1, 1.2, 2.1, ...
+    """
+
+    to_remove = []
+
+    for i, para in enumerate(doc.paragraphs):
+        if i < title_end_idx:
+            continue
+
+        text = para.text.strip()
+
+        # Проверяем, является ли это заголовком
+        is_heading = _is_main_heading(text) or _is_subheading(text)
+
+        if is_heading:
+            # Проверяем параграфы ПЕРЕД заголовком на пустоту
+            j = i - 1
+            while j >= title_end_idx:
+                prev_para = doc.paragraphs[j]
+                prev_text = prev_para.text.strip()
+
+                # Проверяем есть ли изображение
+                if _has_image(prev_para):
+                    break
+
+                if not prev_text:
+                    # Пустой параграф перед заголовком - помечаем на удаление
+                    to_remove.append(j)
+                    j -= 1
+                else:
+                    # Непустой параграф - выходим
+                    break
+
+            # Проверяем параграфы ПОСЛЕ заголовка на пустоту
+            j = i + 1
+            while j < len(doc.paragraphs):
+                next_para = doc.paragraphs[j]
+                next_text = next_para.text.strip()
+
+                # Проверяем есть ли изображение
+                if _has_image(next_para):
+                    break
+
+                if not next_text:
+                    # Пустой параграф после заголовка - помечаем на удаление
+                    to_remove.append(j)
+                    j += 1
+                else:
+                    # Непустой параграф - выходим
+                    break
+
+    # Удаляем с конца, чтобы не сбить индексы
+    for idx in sorted(set(to_remove), reverse=True):
+        para = doc.paragraphs[idx]
+        p = para._element
+        p.getparent().remove(p)
+
+    logger.info(f"Удалено {len(set(to_remove))} пустых параграфов вокруг заголовков")
+
+
 def _fix_colons(doc: Document, title_end_idx: int) -> None:
     """
     Исправляет форматирование двоеточий:
@@ -689,7 +811,8 @@ def _fix_dashes(doc: Document, title_end_idx: int) -> None:
 def _fix_numbering_styles(doc: Document) -> None:
     """
     Исправляет стили нумерации в numbering.xml.
-    Устанавливает Times New Roman 14pt для всех номеров списков.
+    Устанавливает Times New Roman 14pt только для НУМЕРОВАННЫХ списков.
+    Маркированные списки (bullet) не трогаем, чтобы сохранить символы маркеров.
     """
 
     # Получаем доступ к numbering part
@@ -706,20 +829,32 @@ def _fix_numbering_styles(doc: Document) -> None:
         # Проходим по всем abstractNum
         for abstractNum in numbering_elm.findall('.//w:abstractNum', nsmap):
             for lvl in abstractNum.findall('.//w:lvl', nsmap):
-                # Ищем или создаём rPr
-                rPr = lvl.find('.//w:rPr', nsmap)
+                # Проверяем numFmt - если bullet, пропускаем полностью
+                numFmt = lvl.find('.//w:numFmt', nsmap)
+                is_bullet = False
+                if numFmt is not None:
+                    fmt_val = numFmt.get(qn('w:val'))
+                    if fmt_val == 'bullet':
+                        is_bullet = True
+
+                if is_bullet:
+                    # Маркированный список - не трогаем вообще
+                    continue
+
+                # Это нумерованный список - устанавливаем Times New Roman 14pt
+                rPr = lvl.find('w:rPr', nsmap)
 
                 if rPr is None:
                     # Создаём rPr
                     rPr = OxmlElement('w:rPr')
                     lvl.append(rPr)
 
-                # Удаляем старые настройки шрифта
-                for old_elem in rPr.findall('.//w:rFonts', nsmap):
+                # Удаляем старые настройки шрифта и размера
+                for old_elem in list(rPr.findall('w:rFonts', nsmap)):
                     rPr.remove(old_elem)
-                for old_elem in rPr.findall('.//w:sz', nsmap):
+                for old_elem in list(rPr.findall('w:sz', nsmap)):
                     rPr.remove(old_elem)
-                for old_elem in rPr.findall('.//w:szCs', nsmap):
+                for old_elem in list(rPr.findall('w:szCs', nsmap)):
                     rPr.remove(old_elem)
 
                 # Добавляем Times New Roman
@@ -839,6 +974,10 @@ def _set_paragraph_ending(paragraph, ending: str) -> None:
     if text.endswith(ending):
         return
 
+    # Если заканчивается на двоеточие - не трогаем (это вводная фраза перед подсписком)
+    if text.endswith(':'):
+        return
+
     # Проверяем, есть ли гиперссылки в параграфе
     hyperlinks = paragraph._element.findall('.//w:hyperlink',
                                             {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'})
@@ -880,7 +1019,9 @@ def _set_paragraph_ending(paragraph, ending: str) -> None:
 
         if last_run:
             run_text = last_run.text.rstrip()
-            if run_text and run_text[-1] in '.;,:!':
+            if run_text and run_text[-1] in '.;,!':
+                # Заменяем только точку, точку с запятой, запятую, восклицательный знак
+                # Двоеточие НЕ заменяем - оно может быть частью текста
                 last_run.text = run_text[:-1] + ending
             else:
                 last_run.text = run_text + ending
@@ -944,9 +1085,9 @@ def format_document(input_file: str, output_file: str = None) -> bool:
         # Если нужно изменить поля - пользователь делает это вручную
         logger.info("Поля страницы не изменяются (сохраняем оригинальные)")
 
-        # НЕ меняем нумерацию страниц - это может затрагивать титульник
-        # Нумерация должна быть настроена в исходном документе
-        logger.info("Нумерация страниц не изменяется (сохраняем оригинальную)")
+        # Настраиваем нумерацию страниц (снизу по центру, без титульника)
+        logger.info("Настройка нумерации страниц...")
+        _add_page_numbers(doc)
 
         # Исправление стилей нумерации списков
         logger.info("Исправление стилей нумерации списков...")
@@ -956,9 +1097,25 @@ def format_document(input_file: str, output_file: str = None) -> bool:
         logger.info("Обработка подписей к рисункам...")
         _process_figures(doc, title_end_idx)
 
+        # Пересчитываем индекс после возможного добавления параграфов
+        title_end_idx = _find_title_page_end(doc)
+        logger.info(f"Пересчитан title_end_idx = {title_end_idx}")
+
         # Удаление пустых параграфов перед главными заголовками
         logger.info("Обработка разрывов страниц...")
         _process_page_breaks(doc, title_end_idx)
+
+        # Пересчитываем индекс после возможного удаления параграфов
+        title_end_idx = _find_title_page_end(doc)
+        logger.info(f"Пересчитан title_end_idx = {title_end_idx}")
+
+        # Удаление пустых параграфов до и после заголовков
+        logger.info("Удаление пустых параграфов вокруг заголовков...")
+        _remove_empty_around_headings(doc, title_end_idx)
+
+        # Пересчитываем индекс после удаления параграфов
+        title_end_idx = _find_title_page_end(doc)
+        logger.info(f"Пересчитан title_end_idx = {title_end_idx}")
 
         # Форматирование документа (кроме титульника)
         logger.info("Форматирование документа...")
@@ -990,7 +1147,7 @@ def format_document(input_file: str, output_file: str = None) -> bool:
 
         # Подписи таблиц
         logger.info("Проверка подписей таблиц...")
-        _add_table_captions(doc)
+        _add_table_captions(doc, title_end_idx)
 
         # Замена сокращений
         logger.info("Замена сокращений...")
@@ -998,7 +1155,7 @@ def format_document(input_file: str, output_file: str = None) -> bool:
 
         # Форматирование библиографии
         logger.info("Форматирование библиографии...")
-        _format_bibliography(doc)
+        _format_bibliography(doc, title_end_idx)
 
         # Удаление лишних пустых строк
         logger.info("Удаление лишних пустых строк...")
@@ -1028,6 +1185,11 @@ def _process_figures(doc: Document, title_end_idx: int) -> None:
         # Проверяем, есть ли изображение в параграфе
         if _has_image(para):
             figure_number += 1
+
+            # Выравниваем рисунок по центру
+            para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            para.paragraph_format.first_line_indent = Cm(0)
+            para.paragraph_format.left_indent = Cm(0)
 
             # Проверяем следующий параграф на наличие подписи
             next_para = doc.paragraphs[i + 1] if i + 1 < len(doc.paragraphs) else None
@@ -1151,6 +1313,12 @@ def _format_document_content(doc: Document, title_end_idx: int) -> None:
             continue
 
         text = paragraph.text.strip()
+
+        # Проверяем наличие изображения - выравниваем по центру
+        if _has_image(paragraph):
+            _format_image_paragraph(paragraph)
+            continue
+
         if not text:
             continue
 
@@ -1164,6 +1332,16 @@ def _format_document_content(doc: Document, title_end_idx: int) -> None:
             _format_list_item(paragraph)
         else:
             _format_regular_paragraph(paragraph)
+
+
+def _format_image_paragraph(paragraph) -> None:
+    """Форматирует параграф с изображением: по центру, без отступов"""
+
+    paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    paragraph.paragraph_format.first_line_indent = Cm(0)
+    paragraph.paragraph_format.left_indent = Cm(0)
+    paragraph.paragraph_format.space_before = Pt(0)
+    paragraph.paragraph_format.space_after = Pt(0)
 
 
 def _format_main_heading(paragraph) -> None:
@@ -1267,36 +1445,83 @@ def _format_regular_paragraph(paragraph) -> None:
 
 def _add_page_numbers(doc: Document) -> None:
     """
-    Добавляет нумерацию страниц.
+    Добавляет нумерацию страниц снизу по центру.
     Титульник = страница 1, но номер не отображается.
+    Если нумерация была в верхнем колонтитуле - удаляем её.
     """
 
     for section in doc.sections:
+        # Включаем разные колонтитулы для первой страницы
         section.different_first_page_header_footer = True
 
+        # Очищаем верхний колонтитул от нумерации страниц (если была там)
+        header = section.header
+        header.is_linked_to_previous = False
+        _remove_page_numbers_from_header_footer(header)
+
+        # Очищаем первый верхний колонтитул
+        first_header = section.first_page_header
+        first_header.is_linked_to_previous = False
+        _remove_page_numbers_from_header_footer(first_header)
+
+        # Настраиваем нижний колонтитул для основных страниц
         footer = section.footer
         footer.is_linked_to_previous = False
 
+        # Очищаем существующее содержимое
         for para in footer.paragraphs:
             para.clear()
 
+        # Добавляем номер страницы
         paragraph = footer.paragraphs[0] if footer.paragraphs else footer.add_paragraph()
         paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
         run = paragraph.add_run()
-        fld_char_begin = OxmlElement('w:fldChar')
-        fld_char_begin.set(qn('w:fldCharType'), 'begin')
-
-        instr_text = OxmlElement('w:instrText')
-        instr_text.set(qn('xml:space'), 'preserve')
-        instr_text.text = 'PAGE'
-
-        fld_char_end = OxmlElement('w:fldChar')
-        fld_char_end.set(qn('w:fldCharType'), 'end')
-
-        run._r.append(fld_char_begin)
-        run._r.append(instr_text)
-        run._r.append(fld_char_end)
+        _add_page_field(run)
 
         run.font.name = settings.GOST_FONT_NAME
         run.font.size = Pt(settings.GOST_FONT_SIZE)
+
+        # Очищаем нижний колонтитул первой страницы (титульника)
+        first_footer = section.first_page_footer
+        first_footer.is_linked_to_previous = False
+        for para in first_footer.paragraphs:
+            para.clear()
+
+    logger.info("Нумерация страниц добавлена (снизу по центру, без титульника)")
+
+
+def _remove_page_numbers_from_header_footer(header_footer) -> None:
+    """Удаляет поля PAGE из колонтитула"""
+
+    nsmap = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+
+    for para in header_footer.paragraphs:
+        # Ищем instrText с PAGE
+        for elem in para._element.findall('.//w:instrText', nsmap):
+            if elem.text and 'PAGE' in elem.text.upper():
+                # Нашли номер страницы - очищаем весь параграф
+                para.clear()
+                break
+
+
+def _add_page_field(run) -> None:
+    """Добавляет поле PAGE в run"""
+
+    fld_char_begin = OxmlElement('w:fldChar')
+    fld_char_begin.set(qn('w:fldCharType'), 'begin')
+
+    instr_text = OxmlElement('w:instrText')
+    instr_text.set(qn('xml:space'), 'preserve')
+    instr_text.text = 'PAGE'
+
+    fld_char_separate = OxmlElement('w:fldChar')
+    fld_char_separate.set(qn('w:fldCharType'), 'separate')
+
+    fld_char_end = OxmlElement('w:fldChar')
+    fld_char_end.set(qn('w:fldCharType'), 'end')
+
+    run._r.append(fld_char_begin)
+    run._r.append(instr_text)
+    run._r.append(fld_char_separate)
+    run._r.append(fld_char_end)
