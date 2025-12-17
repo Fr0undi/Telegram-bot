@@ -33,13 +33,8 @@ def _find_title_page_end(doc: Document) -> int:
 
     nsmap = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
 
-    # Сначала ищем разрыв страницы - это самый надёжный маркер
+    # Проверяем наличие разрыва страницы в параграфе
     for i, para in enumerate(doc.paragraphs):
-        # Проверяем наличие разрыва страницы в параграфе
-        # Разрыв страницы может быть в виде:
-        # 1. pageBreakBefore в свойствах параграфа
-        # 2. br элемент с type="page" внутри run
-        # 3. sectPr (разрыв секции)
 
         # Проверяем pageBreakBefore
         pPr = para._element.find(qn('w:pPr'))
@@ -51,6 +46,7 @@ def _find_title_page_end(doc: Document) -> int:
                 if val is None or val.lower() in ('true', '1', 'on'):
                     if i > 0:  # Не считаем если это самый первый параграф
                         logger.info(f"Найден pageBreakBefore на параграфе {i}")
+
                         return i
 
             # Проверяем sectPr (разрыв секции) в свойствах параграфа
@@ -59,6 +55,7 @@ def _find_title_page_end(doc: Document) -> int:
                 # Разрыв секции означает начало новой страницы
                 # Следующий параграф - начало новой страницы
                 logger.info(f"Найден sectPr на параграфе {i}")
+
                 return i + 1
 
         # Проверяем br элементы с type="page"
@@ -67,6 +64,7 @@ def _find_title_page_end(doc: Document) -> int:
             if br_type == 'page':
                 # Разрыв найден - следующий параграф начинает новую страницу
                 logger.info(f"Найден br type=page на параграфе {i}")
+
                 return i + 1
 
     # Разрывов нет - ищем "СОДЕРЖАНИЕ"/"ОГЛАВЛЕНИЕ" как начало второй страницы
@@ -74,27 +72,29 @@ def _find_title_page_end(doc: Document) -> int:
         text = para.text.strip().upper()
         if text in ['СОДЕРЖАНИЕ', 'ОГЛАВЛЕНИЕ']:
             logger.info(f"Найдено '{text}' на параграфе {i} (начало второй страницы)")
+
             return i
 
     # Если ничего не найдено, ищем первый главный заголовок
-    # (ВВЕДЕНИЕ, ГЛАВА и т.д.) - это точно не титульный лист
     for i, para in enumerate(doc.paragraphs):
         text = para.text.strip().upper()
         if text in ['ВВЕДЕНИЕ', 'АННОТАЦИЯ', 'РЕФЕРАТ']:
             logger.info(f"Найден заголовок '{text}' на параграфе {i}")
+
             return i
+
         if text.startswith('ГЛАВА ') or text.startswith('ГЛАВА\t'):
             logger.info(f"Найден заголовок '{text}' на параграфе {i}")
+
             return i
 
     logger.warning("Не удалось определить конец первой страницы, возвращаем 0")
+
     return 0
 
 
 def _is_main_heading(text: str) -> bool:
-    """
-    Проверяет, является ли текст главным заголовком (требует разрыв страницы).
-    """
+    """Проверяет, является ли текст главным заголовком (требует разрыв страницы)."""
 
     text_upper = text.strip().upper()
 
@@ -102,21 +102,24 @@ def _is_main_heading(text: str) -> bool:
     if text_upper in ['СОДЕРЖАНИЕ', 'ОГЛАВЛЕНИЕ', 'ВВЕДЕНИЕ', 'ЗАКЛЮЧЕНИЕ',
                       'СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ', 'БИБЛИОГРАФИЧЕСКИЙ СПИСОК',
                       'АННОТАЦИЯ', 'РЕФЕРАТ', 'ПРИЛОЖЕНИЕ', 'ПРИЛОЖЕНИЯ']:
+
         return True
 
     # Главы
     if re.match(r'^ГЛАВА\s+\d+', text_upper):
+
         return True
 
     return False
 
 
 def _is_subheading(text: str) -> bool:
-    """
-    Проверяет, является ли текст подзаголовком (1.1, 1.2, 2.1 и т.д.)
-    """
+    """Проверяет, является ли текст подзаголовком. Учитывает возможные вариации: пробелы, табы, разные виды точек"""
 
-    return bool(re.match(r'^\d+\.\d+', text.strip()))
+    text = text.strip()
+    pattern = r'^\d{1,2}[\.]\d{1,2}(?:\.\d{1,2})?[\s\t]+'
+
+    return bool(re.match(pattern, text))
 
 
 def _is_figure_caption(text: str) -> bool:
@@ -130,8 +133,29 @@ def _is_list_item(paragraph) -> bool:
     pPr = paragraph._element.find(qn('w:pPr'))
     if pPr is not None:
         numPr = pPr.find(qn('w:numPr'))
+
         return numPr is not None
+
     return False
+
+
+def _get_list_level(paragraph) -> int:
+    """Возвращает уровень вложенности элемента списка (0-based), или -1 если не список"""
+
+    pPr = paragraph._element.find(qn('w:pPr'))
+    if pPr is not None:
+        numPr = pPr.find(qn('w:numPr'))
+        if numPr is not None:
+            ilvl = numPr.find(qn('w:ilvl'))
+            if ilvl is not None:
+                try:
+                    return int(ilvl.get(qn('w:val'), '0'))
+                except:
+                    return 0
+
+            return 0
+
+    return -1
 
 
 def _fix_list_first_letter(doc: Document, title_end_idx: int) -> None:
@@ -166,7 +190,7 @@ def _fix_list_first_letter(doc: Document, title_end_idx: int) -> None:
                 # Проверяем что это не аббревиатура (следующая буква тоже заглавная)
                 next_idx = first_letter_idx + 1
                 if next_idx < len(text) and text[next_idx].isupper():
-                    break  # Это аббревиатура, не трогаем
+                    break
 
                 # Делаем первую букву строчной
                 new_text = text[:first_letter_idx] + text[first_letter_idx].lower() + text[first_letter_idx+1:]
@@ -178,12 +202,10 @@ def _fix_list_first_letter(doc: Document, title_end_idx: int) -> None:
 
 
 def _fix_multiple_spaces(doc: Document, title_end_idx: int) -> None:
-    """
-    Убирает множественные пробелы (заменяет на один).
-    Обрабатывает случаи когда пробелы в разных runs.
-    """
+    """Убирает множественные пробелы (заменяет на один). Обрабатывает случаи когда пробелы в разных runs"""
 
     import re
+
     count = 0
 
     def process_paragraph(para):
@@ -226,7 +248,7 @@ def _fix_multiple_spaces(doc: Document, title_end_idx: int) -> None:
             continue
         process_paragraph(para)
 
-    # Также в таблицах (они не в титульнике)
+    # Также в таблицах
     for table in doc.tables:
         for row in table.rows:
             for cell in row.cells:
@@ -237,17 +259,15 @@ def _fix_multiple_spaces(doc: Document, title_end_idx: int) -> None:
 
 
 def _fix_abbreviations(doc: Document, title_end_idx: int) -> None:
-    """
-    Заменяет сокращения на полные формы:
-    Не заменяет:
-    - т.н. (слишком часто путается с инициалами Т. Н.)
-    """
+    """Заменяет сокращения на полные формы"""
 
     import re
+
     count = 0
 
     def process_text(text):
         if not text:
+
             return text, False
 
         new_text = text
@@ -274,6 +294,7 @@ def _fix_abbreviations(doc: Document, title_end_idx: int) -> None:
     for i, para in enumerate(doc.paragraphs):
         if i < title_end_idx:
             continue
+
         for run in para.runs:
             if run.text:
                 new_text, changed = process_text(run.text)
@@ -337,12 +358,10 @@ def _format_bibliography(doc: Document, title_end_idx: int) -> None:
 
 
 def _add_table_captions(doc: Document, title_end_idx: int) -> None:
-    """
-    Проверяет и форматирует подписи к таблицам.
-    Формат: "Таблица X – Название"
-    """
+    """Проверяет и форматирует подписи к таблицам. Формат: "Таблица N – Название"""
 
     import re
+
     count = 0
 
     for i, para in enumerate(doc.paragraphs):
@@ -389,11 +408,14 @@ def _fix_non_breaking_spaces(doc: Document, title_end_idx: int) -> None:
     """
 
     import re
+
     count = 0
     NBSP = '\u00A0'
 
     def process_text(text):
+
         if not text:
+
             return text, False
 
         new_text = text
@@ -428,6 +450,7 @@ def _fix_non_breaking_spaces(doc: Document, title_end_idx: int) -> None:
     for i, para in enumerate(doc.paragraphs):
         if i < title_end_idx:
             continue
+
         for run in para.runs:
             if run.text:
                 new_text, changed = process_text(run.text)
@@ -450,10 +473,7 @@ def _fix_non_breaking_spaces(doc: Document, title_end_idx: int) -> None:
 
 
 def _fix_quotes(doc: Document, title_end_idx: int) -> None:
-    """
-    Заменяет все типы кавычек на русские «».
-    " " " ' → «»
-    """
+    """Заменяет все типы кавычек на «»"""
 
     count = 0
 
@@ -558,7 +578,7 @@ def _remove_empty_paragraphs(doc: Document, title_end_idx: int) -> None:
         if i < title_end_idx:
             continue
 
-        # Проверяем: пустой ли параграф И нет ли в нём рисунка
+        # Проверяем: пустой ли параграф, нет ли в нём рисунка
         is_empty_text = not para.text.strip()
         has_image = _has_image(para)
 
@@ -654,6 +674,7 @@ def _fix_colons(doc: Document, title_end_idx: int) -> None:
     count = 0
 
     def process_text(text):
+
         new_text = text
 
         # 1. Убираем пробел перед двоеточием
@@ -662,6 +683,7 @@ def _fix_colons(doc: Document, title_end_idx: int) -> None:
 
         # 2. После двоеточия с пробелом - делаем букву строчной
         def lowercase_after_colon(match):
+
             colon_space = match.group(1)  # ": "
             letter = match.group(2)  # заглавная буква
             rest = match.group(3)  # остаток слова
@@ -719,9 +741,10 @@ def _fix_colons(doc: Document, title_end_idx: int) -> None:
     for i, para in enumerate(doc.paragraphs):
         if i < title_end_idx:
             continue
+
         process_paragraph_runs(list(para.runs))
 
-    # Также обрабатываем таблицы (они не в титульнике)
+    # Также обрабатываем таблицы
     for table in doc.tables:
         for row in table.rows:
             for cell in row.cells:
@@ -796,6 +819,7 @@ def _fix_dashes(doc: Document, title_end_idx: int) -> None:
     for i, para in enumerate(doc.paragraphs):
         if i < title_end_idx:
             continue
+
         process_runs(list(para.runs))
 
     # Также проверяем таблицы (они не в титульнике)
@@ -957,10 +981,7 @@ def _fix_list_punctuation(doc: Document, title_end_idx: int) -> None:
 
 
 def _set_paragraph_ending(paragraph, ending: str) -> None:
-    """
-    Устанавливает правильное окончание параграфа.
-    Работает и с обычным текстом, и с гиперссылками.
-    """
+    """Устанавливает правильное окончание параграфа. Работает и с обычным текстом, и с гиперссылками"""
 
     from docx.oxml.ns import qn
     from docx.oxml import OxmlElement
@@ -1080,7 +1101,7 @@ def format_document(input_file: str, output_file: str = None) -> bool:
         title_end_idx = _find_title_page_end(doc)
         logger.info(f"Титульный лист заканчивается на параграфе {title_end_idx}")
 
-        # НЕ меняем поля страницы - это ломает титульник
+        # Не меняем поля страницы - это ломает титульник
         # (документ имеет одну секцию, поля применяются ко всему)
         # Если нужно изменить поля - пользователь делает это вручную
         logger.info("Поля страницы не изменяются (сохраняем оригинальные)")
@@ -1116,6 +1137,10 @@ def format_document(input_file: str, output_file: str = None) -> bool:
         # Пересчитываем индекс после удаления параграфов
         title_end_idx = _find_title_page_end(doc)
         logger.info(f"Пересчитан title_end_idx = {title_end_idx}")
+
+        # Удаление нумерации списка из подзаголовков
+        logger.info("Удаление нумерации списка из подзаголовков...")
+        _remove_list_formatting_from_subheadings(doc, title_end_idx)
 
         # Форматирование документа (кроме титульника)
         logger.info("Форматирование документа...")
@@ -1176,6 +1201,7 @@ def format_document(input_file: str, output_file: str = None) -> bool:
 
 def _process_figures(doc: Document, title_end_idx: int) -> None:
     """Обрабатывает рисунки: добавляет недостающие подписи и исправляет нумерацию"""
+
     figure_number = 0
     i = title_end_idx
 
@@ -1308,6 +1334,9 @@ def _process_page_breaks(doc: Document, title_end_idx: int) -> None:
 
 def _format_document_content(doc: Document, title_end_idx: int) -> None:
     """Форматирует содержимое документа, пропуская титульный лист"""
+
+    subheadings_count = 0
+
     for i, paragraph in enumerate(doc.paragraphs):
         if i < title_end_idx:
             continue
@@ -1326,12 +1355,16 @@ def _format_document_content(doc: Document, title_end_idx: int) -> None:
             _format_main_heading(paragraph)
         elif _is_subheading(text):
             _format_subheading(paragraph)
+            subheadings_count += 1
         elif _is_figure_caption(text):
             _format_caption(paragraph)
         elif _is_list_item(paragraph):
             _format_list_item(paragraph)
         else:
             _format_regular_paragraph(paragraph)
+
+    if subheadings_count > 0:
+        logger.info(f"Отформатировано подзаголовков: {subheadings_count}")
 
 
 def _format_image_paragraph(paragraph) -> None:
@@ -1360,6 +1393,56 @@ def _format_main_heading(paragraph) -> None:
         run.font.size = Pt(16)
         run.font.bold = True
         run._element.rPr.rFonts.set(qn('w:eastAsia'), settings.GOST_FONT_NAME)
+
+
+def _remove_numbering_from_paragraph(paragraph) -> None:
+    """Удаляет нумерацию списка из параграфа (убирает numPr элемент)"""
+
+    pPr = paragraph._element.find(qn('w:pPr'))
+    if pPr is not None:
+        numPr = pPr.find(qn('w:numPr'))
+        if numPr is not None:
+            pPr.remove(numPr)
+
+
+def _remove_list_formatting_from_subheadings(doc: Document, title_end_idx: int) -> None:
+    """
+    Удаляет форматирование нумерованного списка из подзаголовков.
+    Удаляет numPr из всех параграфов-списков, которые соответствуют паттерну
+    подзаголовка: начинаются с "N.M" где N и M - цифры (например "1.1", "2.3").
+    """
+
+    count = 0
+    checked = 0
+    list_items_found = []
+
+    for i, para in enumerate(doc.paragraphs):
+        if i < title_end_idx:
+            continue
+
+        # Проверяем, является ли параграф элементом списка
+        if not _is_list_item(para):
+            continue
+
+        text = para.text.strip()
+        if not text:
+            continue
+
+        checked += 1
+        # Собираем первые 50 символов для логирования
+        list_items_found.append(text[:50])
+
+        # Удаляем нумерацию только если текст явно соответствует паттерну подзаголовка
+        # Паттерн: начинается с цифра.цифра (например "1.1 Название" или "2.3 Описание")
+        if _is_subheading(text):
+            logger.info(f"✓ Удаление нумерации из подзаголовка: '{text[:60]}'")
+            _remove_numbering_from_paragraph(para)
+            count += 1
+
+    logger.info(f"Проверено элементов списка: {checked}, удалена нумерация из {count} подзаголовков")
+    if checked > 0 and count == 0:
+        logger.warning(f"ВНИМАНИЕ: Найдено {checked} элементов списка, но ни один не распознан как подзаголовок")
+        logger.warning(f"Примеры найденных элементов списка: {list_items_found[:5]}")
 
 
 def _format_subheading(paragraph) -> None:
@@ -1444,11 +1527,7 @@ def _format_regular_paragraph(paragraph) -> None:
 
 
 def _add_page_numbers(doc: Document) -> None:
-    """
-    Добавляет нумерацию страниц снизу по центру.
-    Титульник = страница 1, но номер не отображается.
-    Если нумерация была в верхнем колонтитуле - удаляем её.
-    """
+    """Добавляет нумерацию страниц снизу по центру. Титульник = страница 1, но номер не отображается"""
 
     for section in doc.sections:
         # Включаем разные колонтитулы для первой страницы
