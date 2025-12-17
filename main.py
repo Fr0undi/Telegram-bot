@@ -41,7 +41,15 @@ def main():
 
         # Создание приложения
         logger.info("Инициализация приложения...")
-        application = Application.builder().token(settings.BOT_TOKEN).build()
+        application = (
+            Application.builder()
+            .token(settings.BOT_TOKEN)
+            .read_timeout(300)  # 5 минут на чтение ответа
+            .write_timeout(300)  # 5 минут на отправку данных
+            .connect_timeout(60)  # 1 минута на подключение
+            .pool_timeout(300)  # 5 минут для пула соединений
+            .build()
+        )
 
         # Регистрация обработчиков команд
         logger.info("Регистрация обработчиков...")
