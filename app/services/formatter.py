@@ -357,47 +357,221 @@ def _format_bibliography(doc: Document, title_end_idx: int) -> None:
     logger.info(f"Отформатировано {count} записей в библиографии")
 
 
-def _add_table_captions(doc: Document, title_end_idx: int) -> None:
-    """Проверяет и форматирует подписи к таблицам. Формат: "Таблица N – Название"""
+def _is_table_caption(text: str) -> bool:
+    """Проверяет, является ли текст подписью к таблице"""
 
-    import re
+    return bool(re.match(r'^Таблица\s*\d+', text.strip(), re.IGNORECASE))
 
-    count = 0
 
-    for i, para in enumerate(doc.paragraphs):
-        if i < title_end_idx:
+def _get_table_index_in_document(doc: Document, table) -> int:
+    """Находит индекс таблицы среди всех элементов документа (параграфов и таблиц)"""
+
+    # Проходим по всем элементам body документа
+    for i, element in enumerate(doc.element.body):
+        tag = element.tag
+        # Таблица имеет тег {namespace}tbl
+        if 'tbl' in tag and element == table._element:
+            return i
+    return -1
+
+
+def _insert_paragraph_before_table(doc: Document, table, text: str, alignment=WD_ALIGN_PARAGRAPH.RIGHT) -> None:
+    """Вставляет параграф перед таблицей"""
+
+    # Получаем элемент таблицы
+    tbl_element = table._element
+
+    # Создаем новый параграф
+    new_p = OxmlElement('w:p')
+
+    # Создаем свойства параграфа
+    pPr = OxmlElement('w:pPr')
+
+    # Выравнивание
+    jc = OxmlElement('w:jc')
+    if alignment == WD_ALIGN_PARAGRAPH.RIGHT:
+        jc.set(qn('w:val'), 'right')
+    elif alignment == WD_ALIGN_PARAGRAPH.CENTER:
+        jc.set(qn('w:val'), 'center')
+    elif alignment == WD_ALIGN_PARAGRAPH.LEFT:
+        jc.set(qn('w:val'), 'left')
+    pPr.append(jc)
+
+    # Интервал
+    spacing = OxmlElement('w:spacing')
+    spacing.set(qn('w:before'), '0')
+    spacing.set(qn('w:after'), '0')
+    spacing.set(qn('w:line'), str(int(settings.GOST_LINE_SPACING * 240)))
+    spacing.set(qn('w:lineRule'), 'auto')
+    pPr.append(spacing)
+
+    # Отступ
+    ind = OxmlElement('w:ind')
+    ind.set(qn('w:firstLine'), '0')
+    ind.set(qn('w:left'), '0')
+    pPr.append(ind)
+
+    new_p.append(pPr)
+
+    # Создаем run с текстом
+    new_r = OxmlElement('w:r')
+
+    # Свойства run
+    rPr = OxmlElement('w:rPr')
+
+    # Шрифт
+    rFonts = OxmlElement('w:rFonts')
+    rFonts.set(qn('w:ascii'), settings.GOST_FONT_NAME)
+    rFonts.set(qn('w:hAnsi'), settings.GOST_FONT_NAME)
+    rFonts.set(qn('w:cs'), settings.GOST_FONT_NAME)
+    rFonts.set(qn('w:eastAsia'), settings.GOST_FONT_NAME)
+    rPr.append(rFonts)
+
+    # Размер
+    sz = OxmlElement('w:sz')
+    sz.set(qn('w:val'), str(settings.GOST_FONT_SIZE * 2))
+    rPr.append(sz)
+
+    szCs = OxmlElement('w:szCs')
+    szCs.set(qn('w:val'), str(settings.GOST_FONT_SIZE * 2))
+    rPr.append(szCs)
+
+    new_r.append(rPr)
+
+    # Текст
+    t = OxmlElement('w:t')
+    t.text = text
+    new_r.append(t)
+
+    new_p.append(new_r)
+
+    # Вставляем перед таблицей
+    tbl_element.addprevious(new_p)
+
+
+def _format_tables(doc: Document, title_end_idx: int) -> None:
+    """
+    Форматирует таблицы по ГОСТ:
+    - Добавляет подписи к таблицам без них
+    - Форматирует содержимое таблиц (Times New Roman 14pt)
+    - Подпись: "Таблица N" (правый край) + "Название" (следующая строка)
+    """
+
+    # Считаем количество параграфов до title_end_idx
+    # Чтобы не обрабатывать таблицы в титульнике
+
+    # Проходим по всем элементам body и считаем параграфы до title_end_idx
+    para_count = 0
+    elements_to_skip = 0
+
+    for element in doc.element.body:
+        tag = element.tag
+        if 'p' in tag:  # Это параграф
+            para_count += 1
+            elements_to_skip += 1
+            if para_count >= title_end_idx:
+                break
+        elif 'tbl' in tag:  # Это таблица
+            elements_to_skip += 1
+
+    logger.info(f"Пропускаем первые {elements_to_skip} элементов (до конца титульного листа)")
+
+    table_number = 0
+    tables_processed = 0
+    captions_added = 0
+
+    # Проходим по всем таблицам
+    for table in doc.tables:
+        # Определяем индекс таблицы в документе
+        table_idx = _get_table_index_in_document(doc, table)
+
+        if table_idx < elements_to_skip:
+            logger.debug(f"Пропускаем таблицу на индексе {table_idx} (титульный лист)")
             continue
 
-        text = para.text.strip()
+        table_number += 1
+        tables_processed += 1
 
-        # Ищем подписи таблиц
-        if text.lower().startswith('таблица'):
-            # Проверяем формат: Таблица N – Название
-            match = re.match(r'^[Тт]аблица\s*(\d+)\s*[-–—]\s*(.+)$', text)
+        # Проверяем есть ли подпись перед таблицей
+        # Ищем параграф перед таблицей
+        has_caption = False
 
-            if match:
-                num = match.group(1)
-                title = match.group(2)
+        # Получаем предыдущий элемент
+        prev_element = table._element.getprevious()
 
-                # Исправляем формат (короткое тире)
-                new_text = f"Таблица {num} – {title}"
+        if prev_element is not None and 'p' in prev_element.tag:
+            # Это параграф, проверяем его текст
+            # Создаем временный объект Paragraph для удобства
+            from docx.text.paragraph import Paragraph
+            prev_para = Paragraph(prev_element, doc)
+            prev_text = prev_para.text.strip()
 
-                if new_text != text:
-                    para.clear()
-                    run = para.add_run(new_text)
+            if _is_table_caption(prev_text):
+                has_caption = True
+                logger.debug(f"Таблица {table_number} уже имеет подпись: {prev_text[:50]}")
+
+        # Если нет подписи - добавляем
+        if not has_caption:
+            logger.info(f"Добавляем подпись для таблицы {table_number}")
+
+            # Добавляем "Таблица N" (правый край)
+            _insert_paragraph_before_table(doc, table, f"Таблица {table_number}", WD_ALIGN_PARAGRAPH.RIGHT)
+
+            # Добавляем "Название" (следующая строка, по центру)
+            _insert_paragraph_before_table(doc, table, "Название", WD_ALIGN_PARAGRAPH.CENTER)
+
+            captions_added += 1
+
+        # Выравниваем таблицу по центру
+        _align_table_center(table)
+
+        # Форматируем содержимое таблицы
+        _format_table_content(table)
+
+    logger.info(f"Обработано таблиц: {tables_processed}, добавлено подписей: {captions_added}")
+
+
+def _align_table_center(table) -> None:
+    """Выравнивает таблицу по центру страницы"""
+
+    tbl = table._element
+    tblPr = tbl.find(qn('w:tblPr'))
+
+    if tblPr is None:
+        tblPr = OxmlElement('w:tblPr')
+        tbl.insert(0, tblPr)
+
+    # Удаляем существующие настройки выравнивания
+    for jc in tblPr.findall(qn('w:jc')):
+        tblPr.remove(jc)
+
+    # Добавляем выравнивание по центру
+    jc = OxmlElement('w:jc')
+    jc.set(qn('w:val'), 'center')
+    tblPr.append(jc)
+
+
+def _format_table_content(table) -> None:
+    """Форматирует содержимое таблицы: Times New Roman 14pt, выравнивание"""
+
+    for row in table.rows:
+        for cell in row.cells:
+            for paragraph in cell.paragraphs:
+                # Выравнивание по левому краю (или по центру для заголовков)
+                if paragraph.alignment != WD_ALIGN_PARAGRAPH.CENTER:
+                    paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
+
+                # Убираем отступы
+                paragraph.paragraph_format.first_line_indent = Cm(0)
+                paragraph.paragraph_format.left_indent = Cm(0)
+                paragraph.paragraph_format.space_before = Pt(0)
+                paragraph.paragraph_format.space_after = Pt(0)
+
+                # Форматируем runs
+                for run in paragraph.runs:
                     run.font.name = settings.GOST_FONT_NAME
                     run.font.size = Pt(settings.GOST_FONT_SIZE)
                     run._element.rPr.rFonts.set(qn('w:eastAsia'), settings.GOST_FONT_NAME)
-                    count += 1
-
-            # Выравнивание по центру для подписей таблиц
-            para.alignment = WD_ALIGN_PARAGRAPH.LEFT
-            para.paragraph_format.first_line_indent = Cm(0)
-
-    if count > 0:
-        logger.info(f"Исправлено {count} подписей таблиц")
-    else:
-        logger.info("Подписи таблиц не найдены или уже корректны")
 
 def _fix_non_breaking_spaces(doc: Document, title_end_idx: int) -> None:
     """
@@ -1170,9 +1344,9 @@ def format_document(input_file: str, output_file: str = None) -> bool:
         logger.info("Добавление неразрывных пробелов...")
         _fix_non_breaking_spaces(doc, title_end_idx)
 
-        # Подписи таблиц
-        logger.info("Проверка подписей таблиц...")
-        _add_table_captions(doc, title_end_idx)
+        # Форматирование таблиц и подписей
+        logger.info("Форматирование таблиц и добавление подписей...")
+        _format_tables(doc, title_end_idx)
 
         # Замена сокращений
         logger.info("Замена сокращений...")
