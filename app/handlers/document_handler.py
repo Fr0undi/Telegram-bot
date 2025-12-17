@@ -26,6 +26,13 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     try:
         # Получаем информацию о файле
         document = update.message.document
+        file_size_mb = document.file_size / (1024 * 1024)  # размер в МБ
+
+        logger.info(
+            f"Получен файл {document.file_name} "
+            f"размером {file_size_mb:.2f} МБ "
+            f"от пользователя {update.effective_user.id}"
+        )
 
         # Проверяем, что это Word документ
         if not is_valid_document(document.file_name):
@@ -37,6 +44,13 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 f"неподдерживаемый файл: {document.file_name}"
             )
             return
+
+        # Предупреждаем о больших файлах
+        if file_size_mb > 10:
+            await update.message.reply_text(
+                f"⚠️ Файл большой ({file_size_mb:.1f} МБ). "
+                "Обработка может занять несколько минут..."
+            )
 
         # Отправляем сообщение о начале обработки
         processing_msg = await update.message.reply_text("⏳ Обрабатываю документ...")
@@ -60,6 +74,14 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         success = format_document(input_path, output_path)
 
         if success:
+            # Получаем размер выходного файла
+            import os
+            output_size_mb = os.path.getsize(output_path) / (1024 * 1024)
+            logger.info(
+                f"Готов к отправке файл размером {output_size_mb:.2f} МБ "
+                f"(исходный: {file_size_mb:.2f} МБ)"
+            )
+
             # Отправляем обработанный файл
             with open(output_path, 'rb') as f:
                 await update.message.reply_document(
@@ -68,7 +90,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 )
             await processing_msg.edit_text("✅ Документ успешно отформатирован!")
             logger.info(
-                f"Документ успешно обработан для пользователя {update.effective_user.id}"
+                f"Документ успешно обработан и отправлен пользователю {update.effective_user.id}"
             )
         else:
             await processing_msg.edit_text(
